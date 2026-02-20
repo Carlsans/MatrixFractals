@@ -16,10 +16,10 @@ class MatrixFormula:
         #print(list(self.types.keys()))
         self.create_random_matrix()
     def process_matrix(self,fractal):
-        result = fractal.get_empty_Z()
+        result = fractal.get_empty_window()
         for i in range(self.size[0]):
             # Start with the first item of the line
-            line_Z = fractal.get_empty_Z() + self.compute_matrix_item(fractal,self.matrix[i][0])
+            line_Z = fractal.get_empty_window() + self.compute_matrix_item(fractal,self.matrix[i][0]) # Use windows gpu C,D and Z
             #print(line_Z.shape)
             for j in range(1,self.size[1]):
                 current = self.compute_matrix_item(fractal,self.matrix[i][j])
@@ -73,7 +73,7 @@ class MatrixFormula:
                         case 'D':
                             return minus*torch.sin(fractal.get_D_var())
                         case 'Z':
-                            return minus * torch.sin(fractal.Z)
+                            return minus * torch.sin(fractal.get_Z_var())
                 case 'cos':
                     match var:
                         case 'C':
@@ -81,7 +81,7 @@ class MatrixFormula:
                         case 'D':
                             return minus*torch.cos(fractal.get_D_var())
                         case 'Z':
-                            return minus * torch.cos(fractal.Z)
+                            return minus * torch.cos(fractal.get_Z_var())
                 case 'square':
                     match var:
                         case 'C':
@@ -89,7 +89,7 @@ class MatrixFormula:
                         case 'D':
                             return minus*torch.square(fractal.get_D_var())
                         case 'Z':
-                            return minus * torch.square(fractal.Z)
+                            return minus * torch.square(fractal.get_Z_var())
                 case 'sqrt':
                     match var:
                         case 'C':
@@ -97,7 +97,7 @@ class MatrixFormula:
                         case 'D':
                             return minus*torch.sqrt(fractal.get_D_var())
                         case 'Z':
-                            return minus * torch.sqrt(fractal.Z)
+                            return minus * torch.sqrt(fractal.get_Z_var())
                 case 'log':
                     match var:
                         case 'C':
@@ -105,7 +105,7 @@ class MatrixFormula:
                         case 'D':
                             return minus * torch.log(fractal.get_D_var())
                         case 'Z':
-                            return minus * torch.log(fractal.Z)
+                            return minus * torch.log(fractal.get_Z_var())
                 case 'inverse':
                     match var:
                         case 'C':
@@ -113,7 +113,7 @@ class MatrixFormula:
                         case 'D':
                             return minus * 1/fractal.get_D_var()
                         case 'Z':
-                            return minus * 1/fractal.Z
+                            return minus * 1/fractal.get_Z_var()
         # Here we have a variable
         else:
             print('variable')
@@ -129,5 +129,5 @@ class MatrixFormula:
                 return minus * fractal.get_D_var()
             if "Z" in item:
                 print("Z")
-                return minus * fractal.Z
+                return minus * fractal.get_Z_var()
 
