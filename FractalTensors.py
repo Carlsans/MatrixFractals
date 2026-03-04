@@ -3,11 +3,14 @@ import gc
 import subprocess
 from collections import namedtuple
 from os.path import dirname, abspath
+from pprint import pprint
 from typing import Tuple
 
+import coolname
 import numpy as np
 import torch
 from mpmath.libmp import normalize
+from sympy.strategies.core import switch
 from torchcodec.encoders import VideoEncoder
 from TimeFunctions import TimeFunctions as tf
 from MatrixFormula import MatrixFormula
@@ -15,38 +18,48 @@ import matplotlib.pyplot as plt
 from matplotlib import colormaps
 
 from src.SizeTrackingBuffer import SizeTrackingBuffer
+from src.NormVar import NormVar
 
 
 class FractalTensors:
-    def __init__(self,dimensions: Tuple[int,int,int],center: Tuple[float,float],range: float):
+    def __init__(self,matrix,fractal_name, dimensions: Tuple[int,int,int],center: Tuple[float,float],range: float,cuda_only = True):
         self.max_iter = 100
-
+        self.matrix = matrix
+        self.fractal_name = fractal_name
         Dimension = namedtuple("Dimension", ["x", "y", "t"])
         self.dimensions = Dimension(dimensions[0],dimensions[1],dimensions[2])
+        self.center = center
+        self.range = range
         self.parameters = dimensions[0]*dimensions[1]*dimensions[2]
-        self.window_size = 40000000
+        self.window_size = 35000000
         self.current_window = 0
         self.max_window = int((dimensions[0]*dimensions[1]*dimensions[2])/self.window_size)+1
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.bailout = torch.zeros(self.dimensions, dtype=torch.int16, device=torch.device("cpu"), requires_grad=False)
-        self.bailoutexitvalues = torch.zeros(self.dimensions, dtype=torch.complex128, device=torch.device("cpu"), requires_grad=False)
+        self.cuda_only = cuda_only
+        if cuda_only:
+            self.storage_device= self.device
+        else:
+            self.storage_device = torch.device("cpu")
+
+        self.bailout = torch.zeros(self.dimensions, dtype=torch.int16, device=self.storage_device, requires_grad=False)
+        self.bailoutexitvalues = torch.zeros(self.dimensions, dtype=torch.complex128, device=self.storage_device, requires_grad=False)
 
         # Fractal shape is [dimensions.x,dimensions.y,,dimensions.z,2] the last dimension account for variable C and D. Then reduced to [dimensions.x,dimensions.y,,dimensions.z] in Z
-        self.Z = torch.zeros([self.dimensions.x,self.dimensions.y,self.dimensions.t], dtype=torch.complex128, device=torch.device("cpu"), requires_grad=False)
+        self.Z = torch.zeros([self.dimensions.x,self.dimensions.y,self.dimensions.t], dtype=torch.complex128, device=self.storage_device, requires_grad=False)
         #self.C = torch.zeros([self.dimensions.x,self.dimensions.y,self.dimensions.t], dtype=torch.complex128, device=torch.device("cpu"), requires_grad=False)
-        self.D = torch.zeros([self.dimensions.x,self.dimensions.y,self.dimensions.t], dtype=torch.complex128, device=torch.device("cpu"), requires_grad=False)
+        self.D = torch.zeros([self.dimensions.x,self.dimensions.y,self.dimensions.t], dtype=torch.complex128, device=self.storage_device, requires_grad=False)
 
         rangereal = (center[0] - range, center[0] + range)
         rangeimag = (center[1] - range, center[1] + range)
         #real_linspace = torch.linspace(rangereal[0], rangereal[1], self.dimensions.y, device=self.device) * torch.ones(self.dimensions.x, 1, 1, device=self.device)
-        real_linspace = torch.linspace(rangereal[0], rangereal[1], self.dimensions.y, device=torch.device("cpu")).reshape(1,-1,1)
+        real_linspace = torch.linspace(rangereal[0], rangereal[1], self.dimensions.y, device=self.storage_device).reshape(1,-1,1)
         #print("real_linspace.shape",real_linspace.shape)
         self.C_real = torch.linspace(rangereal[0], rangereal[1], self.dimensions.y,
-                                     dtype=torch.complex128, device=torch.device("cpu")
+                                     dtype=torch.complex128, device=self.storage_device
                                      ).reshape(1, -1, 1)  # shape (1, y, 1)
 
         self.C_imag = (torch.linspace(rangeimag[0], rangeimag[1], self.dimensions.x,
-                                      dtype=torch.complex128, device=torch.device("cpu")
+                                      dtype=torch.complex128, device=self.storage_device
                                       ) * 1j).reshape(-1, 1, 1)  # shape (x, 1, 1)
         self.C = self.C_real + self.C_imag
 
@@ -58,24 +71,70 @@ class FractalTensors:
 
 
 
-        print("c shape before addition",(self.C_real + self.C_imag).shape)
-        print("c shape before added",self.C.shape)
+        #print("c shape before addition",(self.C_real + self.C_imag).shape)
+        #print("c shape before added",self.C.shape)
 
-        time = tf.time_from_sin(-3,3,self.dimensions.t,True) * torch.ones(1, 1, self.dimensions.t, device=torch.device("cpu"))
+        self.time = tf.time_from_sin(0,1,self.dimensions.t,not self.cuda_only) * torch.ones(1, 1, self.dimensions.t, device=self.storage_device)
         # Note Pas certain que la forme est bonne. Le tenseur est trop homogene
         #print( "time ",time.shape)
-        self.D = time.expand(self.dimensions.x, self.dimensions.y, self.dimensions.t)
+        self.D = self.time.expand(self.dimensions.x, self.dimensions.y, self.dimensions.t)
         #self.D[:, :, :] += time
         #print(self.C)
 
+    def reinit(self):
+        print("reinit")
+        return FractalTensors(self.matrix,self.fractal_name, self.dimensions,self.center,self.range,self.cuda_only)
 
+    @staticmethod
+    def generate_fractal_name():
+        current_timestamp = datetime.datetime.now().timestamp()
+        return str(current_timestamp).replace(".", "") + coolname.generate_slug()
 
+    @staticmethod
+    def get_dimensions_by_mode(mode):
+        """
+        :param mode:
+        Are available : very_low_def (24,24,24), low_def (32,32,32), medium_def (64,64,64), high_def (128,128,64), higher_def (256,256,64), render_laptop (512,512,64), render_desktop (1024,1024,300)
+        :return:
+        """
+        match mode:
+            case 'very_low_def':
+                return (24,24,24)
+            case 'low_def':
+                return (32,32,32)
+            case 'medium_def':
+                return (64,64,64)
+            case 'high_def':
+                return (128,128,64)
+            case 'higher_def':
+                return (256,256,64)
+            case 'render_laptop':
+                return (512,512,64)
+            case 'render_desktop':
+                return (1024,1024,300)
+        print("Bad dimension mode ",mode )
+        exit(1)
+    def save_fractal(self):
+
+        filepath = dirname(abspath(__file__)) + "/matrix_images/"
+        filepathandname = filepath + self.fractal_name + ".frac"
+        to_save_fractal = self.get_fractal()
+        torch.save(to_save_fractal, filepathandname)
+    def get_fractal(self):
+        return {'fractal_name':self.fractal_name, 'matrix': self.matrix}
+    def load_fractal(self,fractal_name):
+        self.fractal_name = fractal_name
+        filepath = dirname(abspath(__file__)) + "/matrix_images/"
+        filepathandname = filepath + self.fractal_name + ".frac"
+        to_load_fractal = torch.load(filepathandname, weights_only=False)
+        self.matrix = to_load_fractal['matrix']
+        pprint(self.matrix)
     def flatten_all_tensors(self):
         self.bailout = torch.flatten(self.bailout)
         self.bailoutexitvalues = torch.flatten(self.bailoutexitvalues)
         self.Z = torch.flatten(self.Z)
         self.C = torch.flatten(self.C).repeat_interleave(self.dimensions.t)
-        print("self.C flatenned",self.C.shape)
+        #print("self.C flatenned",self.C.shape)
         self.D = torch.flatten(self.D)
 
     def reshape_all_tensors(self,only_bailout = False):
@@ -91,8 +150,8 @@ class FractalTensors:
     # Split them by windows, C and D window variables are cached since they are constant. The cache is reset each time we open a new window
     # We iterate until max_iter is up. At each iteration, we calculate Z using the MatrixFormula processing matrix
     # At each iteration we do a bailout test
-    def compute_fractal(self, matrix):
-        fractal.flatten_all_tensors()
+    def compute_fractal(self):
+        self.flatten_all_tensors()
         for window_count in range(self.max_window):
             #self.cached_gpu_reset()
             self.current_window = window_count
@@ -102,9 +161,9 @@ class FractalTensors:
             self.window_Z = self.Z[window['start']:window['stop']].to(device=self.device)
             self.window_C = self.C[window['start']:window['stop']].to(device=self.device)
             self.window_D = self.D[window['start']:window['stop']].to(device=self.device)
-            print("window", window)
+            #print("window", window)
             for i in range(2, self.max_iter + 1):
-                self.window_Z = matrix.process_matrix(self)
+                self.window_Z = self.matrix.process_matrix(self)
                 bailout_result = self.bailouttest(i)
                 # Something wrong here
                 if not bailout_result:
@@ -114,9 +173,9 @@ class FractalTensors:
             self.bailoutexitvalues[window['start']:window['stop']] = self.window_bailout_exit_values
         self.reshape_all_tensors()
 
-        print("bailout at iteration",self.bailout)
-        print("bailout shape",self.bailout.shape)
-        print("bailout exit values", self.bailoutexitvalues)
+        #print("bailout at iteration",self.bailout)
+        #print("bailout shape",self.bailout.shape)
+        #print("bailout exit values", self.bailoutexitvalues)
 
         #for layer in range(self.dimensions.t):
         #    self.drawFractal(filename,layer)
@@ -143,7 +202,7 @@ class FractalTensors:
         nonbailedout = self.window_Z.real + self.window_Z.imag > 4
         if isinstance(nonbailedout,bool):
             return
-        print("nonbailedout.shape",nonbailedout.shape)
+        #print("nonbailedout.shape",nonbailedout.shape)
         if not(nonbailedout.shape == self.window_bailout_exit_values.shape and self.window_bailout_exit_values.shape == self.window_Z.shape):
             return
         self.window_bailout_exit_values[nonbailedout] = self.window_Z[nonbailedout]
@@ -163,7 +222,7 @@ class FractalTensors:
         """
         frame_generator: yields one frame at a time as a numpy array (H, W, 3) uint8
         """
-        video_name = str(datetime.datetime.now().timestamp()).replace(".","")
+        video_name = self.fractal_name
         filepath = dirname(abspath(__file__)) + "/matrix_images/"
         filepathandname = filepath + video_name + str(self.dimensions.x) + "x" + str(self.dimensions.y) + "F" + str(
             str(self.dimensions.t)) + ".mp4"
@@ -306,24 +365,6 @@ class FractalTensors:
     def get_Z_var(self):
         return self.window_Z
 
-while(True):
-    fractal = FractalTensors((128,128,8),(0,0),2)
 
-
-    matrix = MatrixFormula((8, 8))
-
-    matrix.create_random_matrix()
-    fractal.compute_fractal(matrix)
-    #fractal.encode_video_streaming()
-
-#fractal.videoFractal()
-    relative_size = fractal.evaluate_video_size()
-    print("relative_size",relative_size)
-    if relative_size > .23:
-        fractal = FractalTensors((1024, 1024, 300), (0, 0), 2)
-        #fractal = FractalTensors((128, 128, 8), (0, 0), 2)
-        fractal.compute_fractal(matrix)
-        #fractal.videoFractal()
-        fractal.encode_video_streaming()
 
 
