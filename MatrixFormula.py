@@ -3,7 +3,8 @@ from typing import List, Tuple
 import torch
 
 class MatrixFormula:
-    def __init__(self,size: Tuple[int,int]):
+    def __init__(self,conf,size: Tuple[int,int]):
+        self.conf =conf
         print("Formula Matrix size = ",size)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.size = size
@@ -49,27 +50,37 @@ class MatrixFormula:
 
         for i in range(self.size[1]):
             for j in range(self.size[0]):
-                choice = random.choice(list(self.types.keys()))
-                #print(choice)
-                match choice:
-                    case 'complex':
-                        real = 3 * torch.rand(1,device=self.device) - 1.5
-                        imag = 3 * torch.rand(1,device=self.device) - 1.5
-                        value = torch.complex(real, imag)
-                    case 'function':
-                        minus_sign = random.choice(['', '-'])
-                        selected_function = random.choice(self.types['function'])
-                        selected_variable = random.choice(self.types['variable'])
-                        value = minus_sign+selected_function+"("+selected_variable+")"
-                    case 'variable':
-                        minus_sign = random.choice(['','-'])
-                        selected_variable = random.choice(self.types['variable'])
-                        value = minus_sign + selected_variable
-                self.matrix[i][j] = value
+                self.matrix[i][j] = self.random_matrix_item()
                 #self.compute_matrix_item(self.matrix[i][j])
         print(self.matrix)
-    @staticmethod
-    def cross_matrices(matrix1,matrix2):
+
+    def random_matrix_item(self):
+        choice = random.choice(list(self.types.keys()))
+        # print(choice)
+        match choice:
+            case 'complex':
+                real = 3 * torch.rand(1, device=self.device) - 1.5
+                imag = 3 * torch.rand(1, device=self.device) - 1.5
+                value = torch.complex(real, imag)
+            case 'function':
+                minus_sign = random.choice(['', '-'])
+                selected_function = random.choice(self.types['function'])
+                selected_variable = random.choice(self.types['variable'])
+                value = minus_sign + selected_function + "(" + selected_variable + ")"
+            case 'variable':
+                minus_sign = random.choice(['', '-'])
+                selected_variable = random.choice(self.types['variable'])
+                value = minus_sign + selected_variable
+        return value
+    def shift_rows(self):
+        shift = random.choice(range(len(self.matrix)))
+        for _ in range(shift):
+            firstrow = self.matrix[0]
+            for row_index in range(1,len(self.matrix)):
+                self.matrix[row_index-1] = self.matrix[row_index]
+            self.matrix[-1] = firstrow
+
+    def cross_matrices(self,matrix1,matrix2):
         if isinstance(matrix1, MatrixFormula):
             matrix1 = matrix1.matrix
         if isinstance(matrix2, MatrixFormula):
@@ -80,8 +91,10 @@ class MatrixFormula:
             print("Matrix dimensions do not match")
             exit(1)
         split_by = random.choice(['column','row'])
+        #split_by = 'row'
         if split_by == 'row':
             split_index = random.randint(1,matrix1_dimensions[0]-1)
+            #split_index = 2
             start1 = matrix1[0:split_index]
             start2 = matrix2[0:split_index]
             end1 = matrix1[split_index:]
@@ -102,15 +115,19 @@ class MatrixFormula:
             new_matrix1 = [list(i) for i in zip(*new_matrix1)]
             new_matrix2 = [list(i) for i in zip(*new_matrix2)]
 
-        embedded_matrix1 = MatrixFormula(matrix1_dimensions)
+        embedded_matrix1 = MatrixFormula(self.conf,matrix1_dimensions)
         embedded_matrix1.matrix = new_matrix1
-        embedded_matrix2 = MatrixFormula(matrix2_dimensions)
+        embedded_matrix2 = MatrixFormula(self.conf,matrix2_dimensions)
         embedded_matrix2.matrix = new_matrix2
         return (embedded_matrix1,embedded_matrix2)
 
+    def mutate_flip_item(self):
+        iindex, jindex = random.randint(0, self.size[0] - 1), random.randint(0, self.size[1] - 1)
+        self.matrix[iindex][jindex] = self.random_matrix_item()
+
     def mutate_matrix_item(self,change_current_mutation_index=True):
         if change_current_mutation_index:
-            iindex, jindex = random.randint(0, self.size[0] - 1), random.randint(0, self.size[0] - 1)
+            iindex, jindex = random.randint(0, self.size[0] - 1), random.randint(0, self.size[1] - 1)
             self.currently_mutating = [iindex, jindex]
         else:
             iindex, jindex = (self.currently_mutating[0],self.currently_mutating[1])
@@ -119,12 +136,15 @@ class MatrixFormula:
         item = self.matrix[iindex][jindex]
         # Here we ha a tensor
         if torch.is_tensor(item):
-            #print('complex')
-            self.matrix[iindex][jindex] = item * torch.complex(3 * torch.rand(1, device=self.device) - 1.5, 3 * torch.rand(1, device=self.device) - 1.5)
+            print('mutating complex')
+            self.matrix[iindex][jindex] = item * torch.complex(4 * torch.rand(1, device=self.device) - 2, 4 * torch.rand(1, device=self.device) - 2)
+            # Continue optimization
+            return True
         # Here we have a function
         elif '(' in item:
             options = ['flip_polarity','switch_function','switch_variable']
             option = random.choice(options)
+            print("Mutating function",option)
             if option == 'flip_polarity':
                 if '-' in item:
                     item.replace("-", "")
@@ -150,10 +170,13 @@ class MatrixFormula:
                 exit(1)
 
             self.matrix[iindex][jindex] = item
+            # do not continue optimization
+            return False
         # Here we have a variable
         else:
             options = ['flip_polarity', 'switch_variable']
             option = random.choice(options)
+            print("Mutating variable", option)
             if option == 'flip_polarity':
                 if '-' in item:
                     item.replace("-", "")
@@ -166,6 +189,8 @@ class MatrixFormula:
             else:
                 exit(1)
             self.matrix[iindex][jindex] = item
+            #do not continue optimization
+            return False
             #print('variable')
 
     def compute_matrix_item(self,fractal,item):

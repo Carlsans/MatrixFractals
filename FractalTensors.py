@@ -3,6 +3,7 @@ import gc
 import subprocess
 from collections import namedtuple
 from os.path import dirname, abspath
+from pathlib import Path
 from pprint import pprint
 from typing import Tuple
 
@@ -22,8 +23,9 @@ from src.NormVar import NormVar
 
 
 class FractalTensors:
-    def __init__(self,matrix,fractal_name, dimensions: Tuple[int,int,int],center: Tuple[float,float],range: float,cuda_only = True):
-        self.max_iter = 100
+    def __init__(self,conf,matrix,fractal_name, dimensions: Tuple[int,int,int],center: Tuple[float,float],range: float,cuda_only = True,max_iter=100):
+        self.conf = conf
+        self.max_iter = max_iter
         self.matrix = matrix
         self.fractal_name = fractal_name
         Dimension = namedtuple("Dimension", ["x", "y", "t"])
@@ -31,7 +33,7 @@ class FractalTensors:
         self.center = center
         self.range = range
         self.parameters = dimensions[0]*dimensions[1]*dimensions[2]
-        self.window_size = 35000000
+        self.window_size = 45000000
         self.current_window = 0
         self.max_window = int((dimensions[0]*dimensions[1]*dimensions[2])/self.window_size)+1
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -42,12 +44,12 @@ class FractalTensors:
             self.storage_device = torch.device("cpu")
 
         self.bailout = torch.zeros(self.dimensions, dtype=torch.int16, device=self.storage_device, requires_grad=False)
-        self.bailoutexitvalues = torch.zeros(self.dimensions, dtype=torch.complex128, device=self.storage_device, requires_grad=False)
+        self.bailoutexitvalues = torch.zeros(self.dimensions, dtype=torch.complex64, device=self.storage_device, requires_grad=False)
 
         # Fractal shape is [dimensions.x,dimensions.y,,dimensions.z,2] the last dimension account for variable C and D. Then reduced to [dimensions.x,dimensions.y,,dimensions.z] in Z
-        self.Z = torch.zeros([self.dimensions.x,self.dimensions.y,self.dimensions.t], dtype=torch.complex128, device=self.storage_device, requires_grad=False)
-        #self.C = torch.zeros([self.dimensions.x,self.dimensions.y,self.dimensions.t], dtype=torch.complex128, device=torch.device("cpu"), requires_grad=False)
-        self.D = torch.zeros([self.dimensions.x,self.dimensions.y,self.dimensions.t], dtype=torch.complex128, device=self.storage_device, requires_grad=False)
+        self.Z = torch.zeros([self.dimensions.x,self.dimensions.y,self.dimensions.t], dtype=torch.complex64, device=self.storage_device, requires_grad=False)
+        #self.C = torch.zeros([self.dimensions.x,self.dimensions.y,self.dimensions.t], dtype=torch.complex64, device=torch.device("cpu"), requires_grad=False)
+        self.D = torch.zeros([self.dimensions.x,self.dimensions.y,self.dimensions.t], dtype=torch.complex64, device=self.storage_device, requires_grad=False)
 
         rangereal = (center[0] - range, center[0] + range)
         rangeimag = (center[1] - range, center[1] + range)
@@ -55,11 +57,11 @@ class FractalTensors:
         real_linspace = torch.linspace(rangereal[0], rangereal[1], self.dimensions.y, device=self.storage_device).reshape(1,-1,1)
         #print("real_linspace.shape",real_linspace.shape)
         self.C_real = torch.linspace(rangereal[0], rangereal[1], self.dimensions.y,
-                                     dtype=torch.complex128, device=self.storage_device
+                                     dtype=torch.complex64, device=self.storage_device
                                      ).reshape(1, -1, 1)  # shape (1, y, 1)
 
         self.C_imag = (torch.linspace(rangeimag[0], rangeimag[1], self.dimensions.x,
-                                      dtype=torch.complex128, device=self.storage_device
+                                      dtype=torch.complex64, device=self.storage_device
                                       ) * 1j).reshape(-1, 1, 1)  # shape (x, 1, 1)
         self.C = self.C_real + self.C_imag
 
@@ -83,21 +85,23 @@ class FractalTensors:
 
     def reinit(self):
         print("reinit")
-        return FractalTensors(self.matrix,self.fractal_name, self.dimensions,self.center,self.range,self.cuda_only)
+        return FractalTensors(self.conf,self.matrix,self.fractal_name, self.dimensions,self.center,self.range,self.cuda_only)
 
     @staticmethod
     def generate_fractal_name():
         current_timestamp = datetime.datetime.now().timestamp()
-        return str(current_timestamp).replace(".", "") + coolname.generate_slug()
+        return coolname.generate_slug()
 
     @staticmethod
     def get_dimensions_by_mode(mode):
         """
         :param mode:
-        Are available : very_low_def (24,24,24), low_def (32,32,32), medium_def (64,64,64), high_def (128,128,64), higher_def (256,256,64), render_laptop (512,512,64), render_desktop (1024,1024,300)
+        Are available : extreme_low_def (12, 12, 12),very_low_def (24,24,24), low_def (32,32,32), medium_def (64,64,64), high_def (128,128,64), higher_def (256,256,64), render_laptop (512,512,64), render_desktop (1024,1024,300)
         :return:
         """
         match mode:
+            case 'extreme_low_def':
+                return (12, 12, 12)
             case 'very_low_def':
                 return (24,24,24)
             case 'low_def':
@@ -114,19 +118,39 @@ class FractalTensors:
                 return (1024,1024,300)
         print("Bad dimension mode ",mode )
         exit(1)
-    def save_fractal(self):
+    def check_fractal_file_exist(self,filefolder = None,filename = None):
+        filepath = dirname(abspath(__file__))
+        if filefolder is None:
+            filefolder = "/matrix_images/"
+        if filename is None:
+            filename = self.fractal_name + ".frac"
+        filepathandname = filepath + filefolder + filename
+        return Path(filepathandname).is_file()
 
-        filepath = dirname(abspath(__file__)) + "/matrix_images/"
-        filepathandname = filepath + self.fractal_name + ".frac"
+    def save_fractal(self,filefolder = None,filename = None):
+        filepath = dirname(abspath(__file__))
+        if filefolder is None:
+            filefolder = "/matrix_images/"
+        if filename is None:
+            filename = self.fractal_name + ".frac"
+        filepathandname = filepath  + filefolder + filename
         to_save_fractal = self.get_fractal()
         torch.save(to_save_fractal, filepathandname)
     def get_fractal(self):
         return {'fractal_name':self.fractal_name, 'matrix': self.matrix}
-    def load_fractal(self,fractal_name):
+
+    def load_fractal(self,fractal_name,filefolder = None,filename = None,fullpath = None):
         self.fractal_name = fractal_name
-        filepath = dirname(abspath(__file__)) + "/matrix_images/"
-        filepathandname = filepath + self.fractal_name + ".frac"
-        to_load_fractal = torch.load(filepathandname, weights_only=False)
+        if fullpath is None:
+            filepath = dirname(abspath(__file__))
+            if filefolder is None:
+                filefolder = "/matrix_images/"
+            if filename is None:
+                filename = self.fractal_name + ".frac"
+            filepathandname = filepath + filefolder + filename
+        else:
+            filepathandname = fullpath
+        to_load_fractal = torch.load(filepathandname, weights_only=False,map_location=torch.device(self.device))
         self.matrix = to_load_fractal['matrix']
         pprint(self.matrix)
     def flatten_all_tensors(self):
@@ -157,7 +181,7 @@ class FractalTensors:
             self.current_window = window_count
             window = self.get_window()
             self.window_bailout = self.get_empty_window(dtype = torch.int16)
-            self.window_bailout_exit_values = self.get_empty_window(dtype = torch.complex128)
+            self.window_bailout_exit_values = self.get_empty_window(dtype = torch.complex64)
             self.window_Z = self.Z[window['start']:window['stop']].to(device=self.device)
             self.window_C = self.C[window['start']:window['stop']].to(device=self.device)
             self.window_D = self.D[window['start']:window['stop']].to(device=self.device)
@@ -179,6 +203,10 @@ class FractalTensors:
 
         #for layer in range(self.dimensions.t):
         #    self.drawFractal(filename,layer)
+    def save_Normalized_Bailout(self,fullpath):
+        torch.save(self.get_Normalized_bailout(), fullpath)
+    def load_Normalized_Bailout(self,fullpath):
+        return torch.load(fullpath,self.device)
     # Handle fractal bailout
     def bailouttest(self, iteration):
         # if self.Z is None or not torch.is_tensor(self.Z):
@@ -288,6 +316,8 @@ class FractalTensors:
 
         to_video = torch.from_numpy((to_video[..., :3] * 255).astype(np.uint8))  # (dim.x, dim.y, dim.t, 3)
         return to_video.permute(2, 3, 0, 1)
+    def get_Normalized_bailout(self):
+        return (self.bailout - self.bailout.min()) / (self.bailout.max() - self.bailout.min())
 
     def prepare_tensor_for_streaming(self):
         # Drop big tensors
@@ -337,7 +367,7 @@ class FractalTensors:
             plt.imsave(self.conf.generateTimestamp(prefix="bin",suffix="r"+str(self.resolution[0])+"x"+str(self.resolution[1])),fractalimage)
 
     # Empty 1D tensor the size of the window
-    def get_empty_window(self,dtype=torch.complex128):
+    def get_empty_window(self,dtype=torch.complex64):
         window = self.get_window()
         current_window_size = window['stop']-window['start']
         return torch.zeros([current_window_size], dtype=dtype,

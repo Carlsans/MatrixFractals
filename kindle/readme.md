@@ -1,0 +1,1 @@
+Files in this folder are used to init GA with good random matrices
