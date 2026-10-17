@@ -174,7 +174,7 @@ def generate_kindle():
     FT = FractalTensors
     mode = FT.get_dimensions_by_mode('low_def')
     while True:
-        matrix = MatrixFormula(conf, (4, 4))
+        matrix = MatrixFormula(conf, (5, 5))
         matrix.create_random_matrix()
         fractal = FractalTensors(conf, matrix, FT.generate_fractal_name(), mode, (0, 0), 2)
         fractal.compute_fractal()
@@ -188,7 +188,11 @@ def load_ga_using_kindle():
     mode = FT.get_dimensions_by_mode('low_def')
     ga = GeneticAlgorithm(conf)
     directory_path = dirname(abspath(__file__))+"/kindle/"
-    kindlespaths = os.listdir(directory_path)
+    path = Path(directory_path)
+    print("path",path)#/home/carl/PycharmProjects/MatrixFractals/src/kindle
+    kindlespaths = [str(i) for i in list(path.glob('*.frac'))]
+    #kindlespaths = [str(i) for i in list(path.glob('*.frac'))]
+    #kindlespaths = os.listdir(directory_path).glob("*.frac")
     print(kindlespaths)
     kindlespaths = sorted(kindlespaths, reverse=True)
     print(kindlespaths)
@@ -202,7 +206,7 @@ def load_ga_using_kindle():
         # matrix.create_random_matrix()
         print(kindle)
         fractal = FractalTensors(conf, None, FT.generate_fractal_name(), mode, (0, 0), 2)
-        fractal.load_fractal(fractal_name="",filefolder="/kindle/",filename=kindle)
+        fractal.load_fractal(fractal_name="",fullpath=kindle)
         fractal, matrix_note = ga.evaluate_matrix(fractal.matrix)
         ga.add_item(fractal.get_fractal(), matrix_note)
         print(fractal)
@@ -379,12 +383,11 @@ if __name__ == '__main__':
         #test_laptop()
     else:
         #compute_multiple_fractals_from_files("/home/carl/PycharmProjects/MatrixFractals/src/precomputed")
-        generate_multiple_projection_from_matrices_ray_cast("/home/carl/PycharmProjects/MatrixFractals/src/precomputed")
+        #generate_multiple_projection_from_matrices_ray_cast("/home/carl/PycharmProjects/MatrixFractals/src/precomputed")
         #generate_VR_fractal()
 
-        #load_ga_using_kindle()
-        #generate_kindle()
-        #simple_GA()
-        #find_fractals_cuda()
+        #generate_kindle() # Generate the kindles (4 concurent work great)
+        simple_GA() # Run the GA
+        #find_fractals_cuda() #old
 
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/
