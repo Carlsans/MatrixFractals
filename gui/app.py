@@ -15,6 +15,9 @@ from PySide6.QtWidgets import (QApplication, QCheckBox, QComboBox, QDoubleSpinBo
 from gui import bridge  # noqa: E402  (installs the import shims first)
 
 
+_JOBS = []
+
+
 class Job(QThread):
     """Runs fn(job) off the UI thread. fn polls job.should_stop() and logs through job.log."""
     log = Signal(str)
@@ -23,6 +26,7 @@ class Job(QThread):
 
     def __init__(self, fn):
         super().__init__()
+        _JOBS.append(self)
         self.fn = fn
         self._stop = threading.Event()
 
@@ -387,6 +391,16 @@ class MainWindow(QMainWindow):
         self.legacy.matrix_found.connect(self.explore.set_matrix)
         self.vr.set_matrix(self.explore.matrix)
         self.resize(1100, 800)
+
+    def closeEvent(self, event):
+        running = [job for job in _JOBS if job.isRunning()]
+        for job in running:
+            job.stop()
+        # a QThread destroyed while running aborts the process, and terminating one inside CUDA does too
+        if not all(job.wait(15000) for job in running):
+            import os
+            os._exit(0)
+        super().closeEvent(event)
 
 
 def main():
