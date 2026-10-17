@@ -1,0 +1,11 @@
+torch
+numpy
+matplotlib
+imageio
+imageio-ffmpeg
+PySide6
+sympy
+mpmath
+# optional: faster size metric, nicer fractal names
+# torchcodec
+# coolname
